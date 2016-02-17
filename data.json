@@ -1,0 +1,36 @@
+{
+  "options": {
+    "from" : "maren@uni.de",
+    "test_reciver" : "news.xyz@hotmail.de",
+    "subject" : "Vergabe der Semiar Themen",
+    "body" : [
+"Hallo {first_name} {last_name},",
+"",
+"",
+"Du kannst Deine Praeferenzen fuer die Seminarthemen abgeben.  Bitte",
+"schicke dazu die angehaengte Datei zuruck mit der Sortierung der Themen",
+"von Deinem Lieblingsthema zum wenigs gemochten Thema. Bitte veraendere",
+"den Dateinamen nicht (er ist eine Art Password) und innerhalb der Datei",
+"sollten die Themen nur getauscht werden (also keinen Aenderungen",
+"innerhalb der geschweiften Klammern).",
+"",
+"Viele Gruesse,",
+"Jan",
+""],
+    "smtp_host" : "smtp.uni.de",
+    "smtp_username" : "maren@uni.de",
+    "smtp_password" : "password",
+    "preference_directory" : "preferences",
+    "result_line_format" : "{first_name} {last_name} ({email}): \"{title}\" am {date} vom {tutor}"
+  },
+  "people": {
+    "a@d.tld": { "first_name": "a", "last_name" : "A" },
+    "b@d.tld": { "first_name": "b", "last_name" : "B" },
+    "c@d.tld": { "first_name": "c", "last_name" : "C" }
+  },
+  "topics": [
+    { "title": "T1", "date" : "D1", "tutor": "t1" },
+    { "title": "T2", "date" : "D2", "tutor": "t2" },
+    { "title": "T3", "date" : "D3", "tutor": "t3" }
+  ]
+}
