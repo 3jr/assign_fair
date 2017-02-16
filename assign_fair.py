@@ -1,32 +1,21 @@
 #!/usr/bin/env python3
 
 import json
-import smtplib
+import csv
 import argparse
 import re
 import os
 import random
 import copy
 from fractions import Fraction
+from functools import reduce
 
-from email import encoders
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-
-help_string = """
-python3 assign_fair.py data.json keys.json command
-
-  create_keys
-  write_invitation_files
-  send_invitation_emails
-  calc_assignment
-"""
-
+topic_format = '"{Thema:<{Thema_max_size}s}"  {Betreuer:<{Betreuer_max_size}s}  {Email_Betreuer:<{Email_Betreuer_max_size}s}'
+csv_delimiter = ';'
 
 def gen_a_key():
-    key = random.choice("abcdefghijklmnopqrstuvwxyz0123456789")
-    return "PASSWORD" + key
+    key_chars = "abcdefghijklmnopqrstuvwxyz012345" # 32 values
+    return ''.join([key_chars[r & 31] for r in os.urandom(10)])
 
 def personalize(person, string):
     for key, value in person.items():
@@ -34,29 +23,54 @@ def personalize(person, string):
     return string
 
 def read_json_file(filename):
-    with open(filename) as f:
+    with open(filename, 'tr') as f:
         return json.loads(f.read())
 
+def merge_dicts(a, b):
+    tmp = a.copy()
+    tmp.update(b)
+    return tmp
+
+
+def lcm(vals):
+    def gcd(a, b):
+        while b != 0:
+            a, b = b, a % b
+        return a
+    def lcm_single(a, b):
+        return a * b // gcd(a, b)
+    return reduce(lcm_single, vals)
+
 class Collector():
-
-    def __init__(self, data_file, key_file, really_send_emails=False):
-        self.really_send_emails = really_send_emails;
-        data = read_json_file(data_file)
+    def __init__(self, people_csv, topics_csv, key_file, pref_dir, out_file):
+        self.pref_dir = pref_dir
+        self.out_file = out_file
         # the ordering of the people and topic elements is important b/c later only indecces are used
-        self.people = data['people']
-        self.topics =  data['topics']
-        assert len(self.people) == len(self.topics)
-        assert len(self.topics) == len(set([t['title'] for t in self.topics]))
+        with open(people_csv, 'tr') as f:
+            reader = csv.DictReader(f, delimiter=csv_delimiter)
+            self.people_dict = {row['Email']: row for row in reader}
+            self.people_fieldnames = reader.fieldnames
+        self.people = list(self.people_dict.keys())
+        assert len(self.people) == len(set(self.people))
+        with open(topics_csv, 'r') as f:
+            reader = csv.DictReader(f, delimiter=csv_delimiter)
+            self.topic_fieldnames = reader.fieldnames
+            self.topics_csv = [t for t in reader]
+            fmt_dict = {
+                    k + "_max_size": max(
+                        map(lambda i: len(i[k]), self.topics_csv)
+                    )
+                    for k in reader.fieldnames
+                }
+            self.topics = [
+                    topic_format.format(**merge_dicts(t, fmt_dict))
+                    for t in self.topics_csv
+                ]
+        assert not any(['{' in t or '}' in t for t in self.topics])
+        assert len(self.topics) == len(set(self.topics))
+        assert len(self.people) <= len(self.topics)
         # we correlate the index for a topic to the string it produces (we need just that to retrive the preferences)
-        self.topics_by_str = {self.format_topic(t): index for index, t in enumerate(self.topics)}
-        self.options =  data['options']
         self.key_file = key_file
-
-    def format_topic(self, topic):
-        txt = '"{0}" am {1} von {2}'.format(topic['title'], topic['date'], topic['tutor'])
-        if '{' in txt or '}' in txt:
-            raise Exception("Nothing related to the topic may contain '{' or '}'")
-        return '{' + txt + '}'
 
     def create_keys(self):
         if os.path.isfile(self.key_file):
@@ -66,68 +80,55 @@ class Collector():
             keys.add(gen_a_key())
         keys = list(keys)
 
-        keys = [{'email': person_email, 'key': key} for person_email, key in zip(self.people.keys(), keys)]
-        with open(self.key_file, 'w') as f:
+        keys = [{'email': person_email, 'key': key}
+                for person_email, key in zip(self.people, keys)]
+        with open(self.key_file, 'tx') as f:
             f.write(json.dumps(keys, indent=2))
 
     def get_invitation_attachment(self, key_entry):
-        person = self.people[key_entry['email']]
-        topics = list(self.topics_by_str.keys())
+        topics = ['{'+t+'}' for t in self.topics]
         random.shuffle(topics)
         txt = "\n".join(topics)
-        filename = "{0}.{1}.({2}).txt".format(person['first_name'], person['last_name'], key_entry['key']);
+        filename = "{}.({}).txt".format(key_entry['email'], key_entry['key'])
         return (txt, filename)
 
     def write_invitation_files(self):
         if not os.path.isfile(self.key_file):
             raise Exception("cannot find key file")
         keys = read_json_file(self.key_file)
-        os.makedirs(self.options['preference_directory'], exist_ok=True)
+        os.makedirs(self.pref_dir, exist_ok=True)
+        new_csv = copy.deepcopy(self.people_dict)
         for k in keys:
             (txt, filename) = self.get_invitation_attachment(k)
-            with open(os.path.join(self.options['preference_directory'], filename), 'w') as f:
+            new_csv[k['email']]['Anhang'] = filename
+            with open(os.path.join(self.pref_dir, filename), 'tx') as f:
                 f.write(txt)
-
-    def send_invitation_emails(self):
-        if not os.path.isfile(self.key_file):
-            raise Exception("cannot find key file")
-        keys = read_json_file(self.key_file)
-        msgs = []
-        for k in keys:
-            p = self.people[k['email']]
-            msg = MIMEMultipart()
-            msg['Subject'] = personalize(p, self.options['subject'])
-            msg['From'] = self.options['from']
-            msg['To'] = k['email'] if self.really_send_emails else self.options['test_reciver']
-            msg.attach(MIMEText(personalize(p, "\n".join(self.options['body']))))
-
-            txt, filename = self.get_invitation_attachment(k)
-            attachment = MIMEBase('application', 'octet-stream')
-            attachment.set_payload(txt)
-            encoders.encode_base64(attachment)
-            attachment.add_header('Content-Disposition', 'attachment', filename=filename)
-            msg.attach(attachment)
-
-            msgs.append(msg)
-
-        smtp = smtplib.SMTP(self.options['smtp_host'])
-        smtp.starttls()
-        smtp.login(self.options['smtp_username'], self.options['smtp_password'])
-        for m in msgs:
-            smtp.send_message(m)
-        smtp.quit()
+        with open(self.out_file, 'tx') as f:
+            writer = csv.DictWriter(f,
+                    self.people_fieldnames + ['Anhang'], delimiter=csv_delimiter
+                )
+            writer.writeheader()
+            for row in new_csv.values():
+                writer.writerow(row)
 
 
-    topic_split_regex = re.compile('(?<=})\s*(?={)')
+    topic_split_regex = re.compile('(?:^|})[^{}]*(?:{|$)')
     def extract_preferences(self, filename):
-        with open(filename, 'r') as f:
+        with open(filename, 'tr') as f:
             txt = f.read().strip()
-        topics = self.topic_split_regex.split(txt)
+        topics = self.topic_split_regex.split(txt)[1:-1]
         preference_list = []
         for t in topics:
-            if t not in self.topics_by_str:
-                raise Exception("invalid topic in {filename}: {topic}".format(filename=filename, topic=t))
-            preference_list.append(self.topics_by_str[t])
+            if t not in self.topics:
+                raise Exception("invalid topic in '{filename}': {topic}"
+                        .format(filename=filename, topic=t))
+            preference_list.append(self.topics.index(t))
+        if not len(self.topics) == len(preference_list):
+            print("{} is incomplete; some topics are missing".format(filename))
+            for i,t in enumerate(self.topics):
+                if t not in preference_list:
+                    print("'{}' is missing in '{}'".format(t, filename))
+                    preference_list.append(i)
         return preference_list
 
     def retrive_preferences(self):
@@ -135,15 +136,19 @@ class Collector():
             raise Exception("cannot find key file")
         keys = read_json_file(self.key_file)
         prefs = {}
-        for filename in [f for f in os.listdir(self.options['preference_directory'])
+        for filename in [f for f in os.listdir(self.pref_dir)
                            if f.endswith('.txt')]:
-            matching_keys = [k for k in keys if '(' + k['key'] + ')' in filename]
+            matching_keys = [k for k in keys if '('+k['key']+')' in filename]
             if len(matching_keys) < 1:
-                raise Exception("file {} doesn't contain any known key".format(filename))
+                raise Exception("file {} doesn't contain any known key"
+                        .format(filename))
             if len(matching_keys) > 1:
-                raise Exception("file {} doesn't contain more than one known key".format(filename))
+                raise Exception("file {} doesn't contain more than one known key"
+                        .format(filename))
             k = matching_keys[0]
-            prefs[k['email']] = self.extract_preferences(os.path.join(self.options['preference_directory'], filename))
+            prefs[k['email']] = self.extract_preferences(
+                    os.path.join(self.pref_dir, filename)
+                )
         return prefs
 
     def calc_assignment(self):
@@ -153,39 +158,53 @@ class Collector():
         prefs_list = []
         index_with_pref = 0
         index_without_pref = len(prefs_dict)
-        for person_email in self.people.keys():
+        for person_email in self.people:
             if person_email in prefs_dict:
                 prefs_list.append(prefs_dict[person_email])
                 index_person_map[index_with_pref] = person_email
                 index_with_pref += 1
             else:
+                print("{}: no preferences where found".format(person_email))
                 index_person_map[index_without_pref] = person_email
                 index_without_pref += 1
         random_assignment = probablisitic_serial_assignmnet(prefs_list)
         random_assignment = fill_incomplete_random_assignment(random_assignment)
-        print('\n'.join([' '.join(map(str,a)) for a in random_assignment]))
         assert is_valid_random_assignment(random_assignment)
+
+        longest_email = max(map(lambda i: len(i), self.people_dict.keys()))
+        denominator = lcm([lcm(map(lambda i: i.denominator, a)) for a in random_assignment])
+        print("in 1/{}".format(denominator))
+        def print_ra_line(email, person_idx):
+            print("{:<{}s}  {}".format(email, longest_email,
+                    ''.join([
+                        "  {val:>{max_len}}".format(
+                            val=(v * denominator).numerator,
+                            max_len=len(str(denominator))
+                        )
+                        for v in random_assignment[person_idx]
+                    ])
+                ))
+        for person_idx in range(len(self.people_dict)):
+            email = index_person_map[person_idx]
+            print_ra_line(email, person_idx)
+        for person_idx in range(len(self.people_dict), len(random_assignment)):
+            print_ra_line("dummy person", person_idx)
+
         deterministic_assignment = fix_random_assignmnet(random_assignment)
-        deterministic_assignment_dict = {
-                index_person_map[person_idx]: assigned_topic_idx
-                for person_idx, assigned_topic_idx in enumerate(deterministic_assignment)}
-        return self.deterministic_assignment_as_string(deterministic_assignment_dict)
 
-    def deterministic_assignment_as_string(self, deterministic_assignment):
-        def format_line(person_email, topic_idx):
-            person = self.people[person_email]
-            topic = self.topics[topic_idx]
-            return self.options['result_line_format'].format(
-                    first_name = person['first_name'],
-                    last_name = person['last_name'],
-                    email = person_email,
-                    title = topic['title'],
-                    date = topic[ 'date'],
-                    tutor = topic['tutor']
-                )
-        return '\n'.join(format_line(person_email, topic_idx) for person_email, topic_idx in deterministic_assignment.items())
-
-
+        new_csv = []
+        for person_idx, assigned_topic_idx in enumerate(deterministic_assignment):
+            if person_idx < len(index_person_map):
+                new_csv.append(merge_dicts(
+                        self.people_dict[index_person_map[person_idx]],
+                        self.topics_csv[assigned_topic_idx]
+                    ))
+        with open(self.out_file, 'tx') as f:
+            new_fieldnames = self.people_fieldnames + self.topic_fieldnames
+            writer = csv.DictWriter(f, new_fieldnames, delimiter=csv_delimiter)
+            writer.writeheader()
+            for row in new_csv:
+                writer.writerow(row)
 
 def is_valid_random_assignment(random_assignment):
     if len(random_assignment) == 0: return False
@@ -216,7 +235,7 @@ def fill_incomplete_random_assignment(incomplete_ra):
             topic_probabilities[topic_idx] += value
     new_topics = [(1 - p)/new_people for p in topic_probabilities]
     for _ in range(new_people):
-        random_assignment.append([copy.deepcopy(new_topics)])
+        random_assignment.append(copy.deepcopy(new_topics))
     return random_assignment
 
 def probablisitic_serial_assignmnet(prefs):
@@ -230,7 +249,10 @@ def probablisitic_serial_assignmnet(prefs):
     elapsed_time = Fraction(0)
     # which preference is currently eaten per person
     eating_pref = [0 for _ in range(num_people)]
-    eaten_per_person_per_topic = [[Fraction(0) for _ in range(num_topics)] for _ in range(num_people)]
+    eaten_per_person_per_topic = [
+            [Fraction(0) for _ in range(num_topics)]
+            for _ in range(num_people)
+        ]
 
     while elapsed_time < 1:
         number_of_eaters = [0 for _ in range(num_topics)]
@@ -356,25 +378,34 @@ def test_Collector():
     #print(c.calc_assignment())
 
 def main():
+    """
+python assign_fair.py Seminar_BSc_SS_16.csv Themen_Seminar_BSc_SS_16.csv create_keys
+python assign_fair.py Seminar_BSc_SS_16.csv Themen_Seminar_BSc_SS_16.csv prepare
+python assign_fair.py Seminar_BSc_SS_16.csv Themen_Seminar_BSc_SS_16.csv calc_assignment --out_file out2.csv
+    """
     parser = argparse.ArgumentParser()
+
     commands = {
             'create_keys' : lambda c: c.create_keys(),
-            'write_invitation_files' : lambda c: c.write_invitation_files(),
-            'send_invitation_emails' : lambda c: c.send_invitation_emails(),
-            'calc_assignment' : lambda c: print(c.calc_assignment())
+            'prepare' : lambda c: c.write_invitation_files(),
+            'calc_assignment' : lambda c: c.calc_assignment()
     }
-    parser.add_argument('datafile',
-            help='The file that keeps all the information.')
-    parser.add_argument('keyfile',
-            help='The file in which to place or read the keys (depending on the command)')
+    parser.add_argument('people_csv',
+            help='information about the people. must have "Email" collum.')
+    parser.add_argument('topics_csv',
+            help='topics file: one topic per line.')
     parser.add_argument('command',
             choices=list(commands.keys()),
             help='can be one of: {}'.format(', '.join(commands.keys())),
             metavar='command')
-    parser.add_argument('--really_send_emails', action='store_true', default=False)
+    parser.add_argument('--keys', default='keys.json',
+            help='The file in which to place or read the keys (depending on the command). Default is "keys.json"')
+    parser.add_argument('--pref_dir', default='preferences',
+            help='the directory in wich to place and read from the preference files. Default is "preferences"')
+    parser.add_argument('--out_file', default='out.csv')
     args = parser.parse_args()
 
-    c = Collector(args.datafile, args.keyfile, args.really_send_emails)
+    c = Collector(args.people_csv, args.topics_csv, args.keys, args.pref_dir, args.out_file)
     commands[args.command](c)
 
 if __name__ == "__main__":
