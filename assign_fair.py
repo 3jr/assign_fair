@@ -151,26 +151,7 @@ class Collector():
                 )
         return prefs
 
-    def calc_assignment(self):
-        prefs_dict = self.retrive_preferences()
-        # sort the preferences correctly, now we just use the index to identify to person
-        index_person_map = {}
-        prefs_list = []
-        index_with_pref = 0
-        index_without_pref = len(prefs_dict)
-        for person_email in self.people:
-            if person_email in prefs_dict:
-                prefs_list.append(prefs_dict[person_email])
-                index_person_map[index_with_pref] = person_email
-                index_with_pref += 1
-            else:
-                print("{}: no preferences where found".format(person_email))
-                index_person_map[index_without_pref] = person_email
-                index_without_pref += 1
-        random_assignment = probablisitic_serial_assignmnet(prefs_list)
-        random_assignment = fill_incomplete_random_assignment(random_assignment)
-        assert is_valid_random_assignment(random_assignment)
-
+    def print_random_assignment(self, random_assignment, index_person_map):
         longest_email = max(map(lambda i: len(i), self.people_dict.keys()))
         denominator = lcm([lcm(map(lambda i: i.denominator, a)) for a in random_assignment])
         print("in 1/{}".format(denominator))
@@ -190,7 +171,34 @@ class Collector():
         for person_idx in range(len(self.people_dict), len(random_assignment)):
             print_ra_line("dummy person", person_idx)
 
+    def make_preference_list(self, prefs_dict):
+        index_person_map = {}
+        prefs_list = []
+        index_with_pref = 0
+        index_without_pref = len(prefs_dict)
+        for person_email in self.people:
+            if person_email in prefs_dict:
+                prefs_list.append(prefs_dict[person_email])
+                index_person_map[index_with_pref] = person_email
+                index_with_pref += 1
+            else:
+                print("{}: no preferences where found".format(person_email))
+                index_person_map[index_without_pref] = person_email
+                index_without_pref += 1
+        return (prefs_list, index_person_map)
+
+    def calc_assignment(self):
+        prefs_dict = self.retrive_preferences()
+        # sort the preferences correctly, now we just use the index to identify to person
+        # and use index_person_map to find the corresponding person if needed
+        (prefs_list, index_person_map) = self.make_preference_list(prefs_dict)
+        random_assignment = probablisitic_serial_assignmnet(prefs_list)
+        random_assignment = fill_incomplete_random_assignment(random_assignment)
+        assert is_valid_random_assignment(random_assignment)
+
         deterministic_assignment = fix_random_assignmnet(random_assignment)
+
+        self.print_random_assignment(random_assignment, index_person_map)
 
         new_csv = []
         for person_idx, assigned_topic_idx in enumerate(deterministic_assignment):
