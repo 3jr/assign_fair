@@ -17,11 +17,6 @@ def gen_a_key():
     key_chars = "abcdefghijklmnopqrstuvwxyz012345" # 32 values
     return ''.join([key_chars[r & 31] for r in os.urandom(10)])
 
-def personalize(person, string):
-    for key, value in person.items():
-        string = re.sub("{" + key + "}", value, string)
-    return string
-
 def read_json_file(filename):
     with open(filename, 'tr') as f:
         return json.loads(f.read())
@@ -169,7 +164,7 @@ class Collector():
             email = index_person_map[person_idx]
             print_ra_line(email, person_idx)
         for person_idx in range(len(self.people_dict), len(random_assignment)):
-            print_ra_line("dummy person", person_idx)
+            print_ra_line("dummy agent", person_idx)
 
     def make_preference_list(self, prefs_dict):
         index_person_map = {}
