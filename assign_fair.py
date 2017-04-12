@@ -12,6 +12,7 @@ from functools import reduce
 
 topic_format = '"{Thema:<{Thema_max_size}s}"  {Betreuer:<{Betreuer_max_size}s}  {Email_Betreuer:<{Email_Betreuer_max_size}s}'
 csv_delimiter = ';'
+csv_lineterminator = '\n';
 
 def gen_a_key():
     key_chars = "abcdefghijklmnopqrstuvwxyz012345" # 32 values
@@ -42,13 +43,13 @@ class Collector():
         self.out_file = out_file
         # the ordering of the people and topic elements is important b/c later only indecces are used
         with open(people_csv, 'tr') as f:
-            reader = csv.DictReader(f, delimiter=csv_delimiter)
+            reader = csv.DictReader(f, delimiter=csv_delimiter,lineterminator=csv_lineterminator)
             self.people_dict = {row['Email']: row for row in reader}
             self.people_fieldnames = reader.fieldnames
         self.people = list(self.people_dict.keys())
         assert len(self.people) == len(set(self.people))
         with open(topics_csv, 'r') as f:
-            reader = csv.DictReader(f, delimiter=csv_delimiter)
+            reader = csv.DictReader(f, delimiter=csv_delimiter,lineterminator=csv_lineterminator)
             self.topic_fieldnames = reader.fieldnames
             self.topics_csv = [t for t in reader]
             fmt_dict = {
@@ -100,7 +101,8 @@ class Collector():
                 f.write(txt)
         with open(self.out_file, 'tx') as f:
             writer = csv.DictWriter(f,
-                    self.people_fieldnames + ['Anhang'], delimiter=csv_delimiter
+                    self.people_fieldnames + ['Anhang'], delimiter=csv_delimiter,
+                    lineterminator=csv_lineterminator
                 )
             writer.writeheader()
             for row in new_csv.values():
@@ -198,13 +200,17 @@ class Collector():
         new_csv = []
         for person_idx, assigned_topic_idx in enumerate(deterministic_assignment):
             if person_idx < len(index_person_map):
-                new_csv.append(merge_dicts(
+                new_row = merge_dicts(
                         self.people_dict[index_person_map[person_idx]],
                         self.topics_csv[assigned_topic_idx]
-                    ))
+                    )
+                prefs_for_person = prefs_list[person_idx]
+                new_row['Rank of Assigned Topic'] = prefs_for_person.index(assigned_topic_idx)
+                new_csv.append(new_row)
         with open(self.out_file, 'tx') as f:
-            new_fieldnames = self.people_fieldnames + self.topic_fieldnames
-            writer = csv.DictWriter(f, new_fieldnames, delimiter=csv_delimiter)
+            new_fieldnames = self.people_fieldnames + self.topic_fieldnames + ['Rank of Assigned Topic']
+            writer = csv.DictWriter(f, new_fieldnames, delimiter=csv_delimiter,
+                    lineterminator=csv_lineterminator)
             writer.writeheader()
             for row in new_csv:
                 writer.writerow(row)
